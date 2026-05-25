@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hässleholm Miljö Setup",
+        "description": "Enter your address alias from the tömningskalender URL.",
+        "data": {
+          "alias": "Address Alias",
+          "scan_interval": "Update interval (hours)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Hässleholm Miljö",
+      "invalid_alias": "Could not find schedule for that address alias",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This address is already configured"
+    }
+  }
+}

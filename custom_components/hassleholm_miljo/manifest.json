@@ -1,0 +1,12 @@
+{
+  "domain": "hassleholm_miljo",
+  "name": "Hässleholm Miljö Tömningskalender",
+  "version": "1.0.0",
+  "documentation": "https://github.com/yourusername/hassleholm-miljo-ha",
+  "issue_tracker": "https://github.com/yourusername/hassleholm-miljo-ha/issues",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": ["beautifulsoup4>=4.12.0"],
+  "iot_class": "cloud_polling",
+  "config_flow": true
+}
