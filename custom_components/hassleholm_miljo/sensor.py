@@ -28,6 +28,7 @@ async def async_setup_entry(
     async_add_entities([
         NextPickupSensor(coordinator, entry),
         DaysUntilPickupSensor(coordinator, entry),
+        PickupTypeSensor(coordinator, entry),
     ])
 
 
@@ -105,6 +106,33 @@ class DaysUntilPickupSensor(CoordinatorEntity[HassleHolmCoordinator], SensorEnti
         return {
             ATTR_PICKUP_TYPE: event.label if event else None,
         }
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
+            "name": self.coordinator.data.address or "Hässleholm Miljö",
+            "manufacturer": "Hässleholm Miljö AB",
+            "model": "Tömningskalender",
+        }
+
+
+class PickupTypeSensor(CoordinatorEntity[HassleHolmCoordinator], SensorEntity):
+    """Sensor showing what is being picked up next."""
+
+    _attr_icon = "mdi:trash-can-outline"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: HassleHolmCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_pickup_type"
+        self._attr_name = "Pickup Type"
+        self._entry = entry
+
+    @property
+    def native_value(self) -> str | None:
+        event = self.coordinator.data.next_event()
+        return event.label if event else None
 
     @property
     def device_info(self):
