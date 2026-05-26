@@ -1,17 +1,22 @@
 """Parser for Hässleholm Miljö tömningskalender."""
 from __future__ import annotations
 
+import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date
 from dataclasses import dataclass, field
 
 import aiohttp
-from bs4 import BeautifulSoup
 
-from .const import BASE_URL, SWEDISH_MONTHS
+from .const import BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
+
+# Matches: AppRegistry.registerInitialState('node-id', { ... });
+_INITIAL_STATE_RE = re.compile(
+    r"AppRegistry\.registerInitialState\('[^']+',(\{)",
+)
 
 
 @dataclass
@@ -61,89 +66,93 @@ async def fetch_calendar(session: aiohttp.ClientSession, alias: str) -> Calendar
     return _parse_html(html)
 
 
+def _extract_json_objects(html: str) -> list[dict]:
+    """Extract all registerInitialState JSON payloads from the page."""
+    decoder = json.JSONDecoder()
+    results = []
+    for m in _INITIAL_STATE_RE.finditer(html):
+        # m.start(1) is the position of the opening '{' of the JSON object
+        try:
+            obj, _ = decoder.raw_decode(html, m.start(1))
+            results.append(obj)
+        except json.JSONDecodeError as err:
+            _LOGGER.debug("Failed to parse registerInitialState JSON: %s", err)
+    return results
+
+
 def _parse_html(html: str) -> CalendarData:
-    """Parse the HTML page and extract pickup events."""
-    soup = BeautifulSoup(html, "html.parser")
+    """Extract pickup events from the embedded JSON state in the page."""
+    blobs = _extract_json_objects(html)
+    _LOGGER.debug("Found %d registerInitialState blobs", len(blobs))
 
-    # Extract address
-    address = ""
-    for h2 in soup.find_all("h2"):
-        text = h2.get_text(strip=True)
-        # Address headers are in all caps like "EKSTIGEN 11, VITTSJÖ"
-        if text and text == text.upper() and len(text) > 5 and not any(
-            m in text for m in ["VI ANVÄNDER", "FELANMÄLAN", "HITTA"]
+    calendar_blob = None
+    services_blob = None
+
+    for blob in blobs:
+        if "calendarMonth" in blob:
+            calendar_blob = blob["calendarMonth"]
+        elif (
+            "services" in blob
+            and isinstance(blob["services"], dict)
+            and "services" in blob["services"]
         ):
-            address = text.title()
-            break
+            services_blob = blob["services"]
 
-    events: list[PickupEvent] = []
-    current_year = datetime.now().year
-    current_month = None
+    # Build address from the services blob
+    address = ""
+    if services_blob:
+        addr = services_blob.get("address", "").title()
+        city = services_blob.get("city", "").title()
+        if addr and city:
+            address = f"{addr}, {city}"
+        _LOGGER.debug("Services blob: address=%r, services=%s", address, services_blob.get("services"))
 
-    for h3 in soup.find_all("h3"):
-        month_text = h3.get_text(strip=True)
-        # Match "Maj 2026" style
-        match = re.match(r"(\w+)\s+(\d{4})", month_text)
-        if match:
-            month_name, year_str = match.group(1), match.group(2)
-            if month_name in SWEDISH_MONTHS:
-                current_month = SWEDISH_MONTHS[month_name]
-                current_year = int(year_str)
-                _LOGGER.debug("Found month section: %s %s", month_name, year_str)
+    event_map: dict[date, PickupEvent] = {}
+
+    # Current-month calendar: each day with services is a pickup
+    if calendar_blob:
+        _LOGGER.debug(
+            "Calendar blob: month=%s %s, days=%d",
+            calendar_blob.get("month"),
+            calendar_blob.get("year"),
+            len(calendar_blob.get("days", [])),
+        )
+        for day in calendar_blob.get("days", []):
+            if not day.get("currentMonth") or not day.get("services"):
+                continue
+            try:
+                day_date = date.fromisoformat(day["date"])
+            except (KeyError, ValueError):
+                continue
+            types = [s["name"] for s in day["services"] if s.get("name")]
+            if types:
+                event_map[day_date] = PickupEvent(date=day_date, types=types)
+    else:
+        _LOGGER.warning("No calendarMonth blob found in page — page structure may have changed")
+
+    # Services next-dates: fills in upcoming pickups beyond the current month view
+    if services_blob:
+        for svc in services_blob.get("services", []):
+            next_date_str = svc.get("nextDate")
+            name = svc.get("description", "")
+            if not next_date_str or not name:
+                continue
+            try:
+                svc_date = date.fromisoformat(next_date_str)
+            except ValueError:
+                continue
+            if svc_date in event_map:
+                if name not in event_map[svc_date].types:
+                    event_map[svc_date].types.append(name)
             else:
-                _LOGGER.debug("Unrecognized month name: %r", month_name)
+                event_map[svc_date] = PickupEvent(date=svc_date, types=[name])
+    else:
+        _LOGGER.warning("No services blob found in page — page structure may have changed")
 
-        # Now look at the calendar table following this h3
-        # Find the next table sibling
-        table = h3.find_next("table")
-        if not table or current_month is None:
-            continue
+    events = sorted(event_map.values(), key=lambda e: e.date)
 
-        _parse_table(table, current_year, current_month, events)
-
-    # Deduplicate and sort
-    events.sort(key=lambda e: e.date)
-
-    _LOGGER.debug("Parsed address: %r, found %d events", address, len(events))
+    _LOGGER.debug("Parsed address: %r, found %d events total", address, len(events))
     for e in events[:5]:
         _LOGGER.debug("  Event: %s — %s", e.date, e.types)
 
     return CalendarData(address=address, events=events)
-
-
-def _parse_table(table, year: int, month: int, events: list[PickupEvent]) -> None:
-    """Parse a calendar table and add pickup events to the list."""
-    cells = table.find_all("td")
-
-    for cell in cells:
-        # Day number is usually a direct text node or in a <p>/<span>
-        day_num = None
-        pickup_types = []
-
-        # Get all text nodes in the cell
-        texts = [t.strip() for t in cell.stripped_strings]
-
-        for text in texts:
-            if re.match(r"^\d{1,2}$", text):
-                try:
-                    num = int(text)
-                    if 1 <= num <= 31:
-                        day_num = num
-                except ValueError:
-                    pass
-            elif any(kw in text for kw in ["Kärl", "Budad", "hämtning", "Avvikelse"]):
-                pickup_types.append(text)
-
-        if day_num and pickup_types:
-            try:
-                event_date = date(year, month, day_num)
-                # Check if we already have an event for this date
-                existing = next((e for e in events if e.date == event_date), None)
-                if existing:
-                    for pt in pickup_types:
-                        if pt not in existing.types:
-                            existing.types.append(pt)
-                else:
-                    events.append(PickupEvent(date=event_date, types=pickup_types))
-            except ValueError:
-                _LOGGER.debug("Invalid date: %d-%d-%d", year, month, day_num)
