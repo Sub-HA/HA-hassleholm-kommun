@@ -13,6 +13,7 @@
     "error": {
       "cannot_connect": "Failed to connect to Hässleholm Miljö",
       "invalid_alias": "Could not find schedule for that address alias",
+      "invalid_alias_format": "Invalid alias — enter just the address part, e.g. 'ekstigen-11-vittsjoe'",
       "unknown": "Unexpected error"
     },
     "abort": {

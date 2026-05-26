@@ -6,6 +6,8 @@ BASE_URL = "https://hassleholmmiljo.se/privat/sophamtning/tomningskalender"
 
 DEFAULT_SCAN_INTERVAL = 12  # hours
 
+ALIAS_PREFIX = "hmab"
+
 CONF_ALIAS = "alias"
 CONF_SCAN_INTERVAL = "scan_interval"
 

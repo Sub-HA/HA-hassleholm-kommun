@@ -12,19 +12,49 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import CONF_ALIAS, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import ALIAS_PREFIX, CONF_ALIAS, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .calendar_parser import fetch_calendar
 
 _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_ALIAS, description={"suggested_value": "hmab-ekstigen-11-vittsjoe"}): str,
+        vol.Required(CONF_ALIAS, description={"suggested_value": "ekstigen-11-vittsjoe"}): str,
         vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=24)
         ),
     }
 )
+
+
+def _normalize_alias(raw: str) -> str:
+    """Extract and validate the alias from a raw input or full URL.
+
+    Accepts the full URL, the full alias (hmab-...), or just the address part.
+    Always returns the full alias with the prefix (e.g. hmab-ekstigen-11-vittsjoe).
+    Raises InvalidAliasFormat if the result doesn't look like a valid alias.
+    """
+    alias = raw.strip()
+    if "alias=" in alias:
+        alias = alias.split("alias=")[-1].strip()
+
+    # Strip prefix so we can re-add it consistently
+    prefix = ALIAS_PREFIX + "-"
+    if alias.startswith(prefix):
+        alias = alias[len(prefix):]
+
+    if not alias:
+        raise InvalidAliasFormat
+
+    return f"{ALIAS_PREFIX}-{alias}"
+
+
+def _alias_display(full_alias: str) -> str:
+    """Return the address part of the alias without the company prefix."""
+    prefix = ALIAS_PREFIX + "-"
+    if full_alias.startswith(prefix):
+        return full_alias[len(prefix):]
+    return full_alias
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
@@ -52,26 +82,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Normalize alias: strip URL if pasted
-            alias = user_input[CONF_ALIAS]
-            if "alias=" in alias:
-                alias = alias.split("alias=")[-1]
-            user_input[CONF_ALIAS] = alias.strip()
-
-            await self.async_set_unique_id(user_input[CONF_ALIAS])
-            self._abort_if_unique_id_configured()
-
             try:
-                info = await validate_input(self.hass, user_input)
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            except InvalidAlias:
-                errors["base"] = "invalid_alias"
-            except Exception:
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                return self.async_create_entry(title=info["title"], data=user_input)
+                user_input[CONF_ALIAS] = _normalize_alias(user_input[CONF_ALIAS])
+            except InvalidAliasFormat:
+                errors[CONF_ALIAS] = "invalid_alias_format"
+
+            if not errors:
+                await self.async_set_unique_id(user_input[CONF_ALIAS])
+                self._abort_if_unique_id_configured()
+
+                try:
+                    info = await validate_input(self.hass, user_input)
+                except aiohttp.ClientError:
+                    errors["base"] = "cannot_connect"
+                except InvalidAlias:
+                    errors["base"] = "invalid_alias"
+                except Exception:
+                    _LOGGER.exception("Unexpected exception")
+                    errors["base"] = "unknown"
+                else:
+                    return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
             step_id="user",
@@ -94,7 +124,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         errors: dict[str, str] = {}
 
-        current_alias = self._config_entry.options.get(
+        full_alias = self._config_entry.options.get(
             CONF_ALIAS, self._config_entry.data.get(CONF_ALIAS, "")
         )
         current_interval = self._config_entry.options.get(
@@ -103,26 +133,27 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
         if user_input is not None:
-            alias = user_input[CONF_ALIAS]
-            if "alias=" in alias:
-                alias = alias.split("alias=")[-1]
-            user_input[CONF_ALIAS] = alias.strip()
-
             try:
-                await validate_input(self.hass, user_input)
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            except InvalidAlias:
-                errors["base"] = "invalid_alias"
-            except Exception:
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                return self.async_create_entry(title="", data=user_input)
+                user_input[CONF_ALIAS] = _normalize_alias(user_input[CONF_ALIAS])
+            except InvalidAliasFormat:
+                errors[CONF_ALIAS] = "invalid_alias_format"
+
+            if not errors:
+                try:
+                    await validate_input(self.hass, user_input)
+                except aiohttp.ClientError:
+                    errors["base"] = "cannot_connect"
+                except InvalidAlias:
+                    errors["base"] = "invalid_alias"
+                except Exception:
+                    _LOGGER.exception("Unexpected exception")
+                    errors["base"] = "unknown"
+                else:
+                    return self.async_create_entry(title="", data=user_input)
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_ALIAS, default=current_alias): str,
+                vol.Required(CONF_ALIAS, default=_alias_display(full_alias)): str,
                 vol.Optional(CONF_SCAN_INTERVAL, default=current_interval): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=24)
                 ),
@@ -134,3 +165,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
 class InvalidAlias(Exception):
     """Error for invalid address alias."""
+
+
+class InvalidAliasFormat(Exception):
+    """Error when the alias doesn't match the expected format."""
