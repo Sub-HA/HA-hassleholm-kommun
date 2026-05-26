@@ -30,7 +30,16 @@ class HassleHolmCoordinator(DataUpdateCoordinator[CalendarData]):
 
     async def _async_update_data(self) -> CalendarData:
         """Fetch data from the website."""
+        _LOGGER.debug("Starting data update for alias %r", self.alias)
         try:
-            return await fetch_calendar(self._session, self.alias)
+            data = await fetch_calendar(self._session, self.alias)
+            _LOGGER.debug(
+                "Update successful: address=%r, events=%d, next=%s",
+                data.address,
+                len(data.events),
+                data.next_event(),
+            )
+            return data
         except Exception as err:
+            _LOGGER.error("Error fetching calendar for alias %r: %s", self.alias, err)
             raise UpdateFailed(f"Error fetching calendar: {err}") from err

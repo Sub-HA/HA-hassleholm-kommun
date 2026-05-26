@@ -123,3 +123,16 @@ content: >
 - **"invalid_alias"** – make sure you copy just the alias value after `?alias=` in the URL
 - **"cannot_connect"** – check your internet connection or if the site is down
 - The calendar only shows what's currently published on the site (typically a few months ahead)
+
+### Enabling debug logging
+
+Add the following to your `configuration.yaml` and restart Home Assistant:
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.hassleholm_miljo: debug
+```
+
+Debug logs are visible under **Settings → System → Logs** and will show the fetch URL, HTTP response status, parsed address, and number of events found.

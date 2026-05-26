@@ -51,9 +51,12 @@ async def fetch_calendar(session: aiohttp.ClientSession, alias: str) -> Calendar
         "Accept-Language": "sv-SE,sv;q=0.9",
     }
 
+    _LOGGER.debug("Fetching calendar from %s", url)
     async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        _LOGGER.debug("Response status: %s, content-type: %s", resp.status, resp.content_type)
         resp.raise_for_status()
         html = await resp.text()
+    _LOGGER.debug("Received %d bytes of HTML", len(html))
 
     return _parse_html(html)
 
@@ -86,6 +89,9 @@ def _parse_html(html: str) -> CalendarData:
             if month_name in SWEDISH_MONTHS:
                 current_month = SWEDISH_MONTHS[month_name]
                 current_year = int(year_str)
+                _LOGGER.debug("Found month section: %s %s", month_name, year_str)
+            else:
+                _LOGGER.debug("Unrecognized month name: %r", month_name)
 
         # Now look at the calendar table following this h3
         # Find the next table sibling
@@ -97,6 +103,10 @@ def _parse_html(html: str) -> CalendarData:
 
     # Deduplicate and sort
     events.sort(key=lambda e: e.date)
+
+    _LOGGER.debug("Parsed address: %r, found %d events", address, len(events))
+    for e in events[:5]:
+        _LOGGER.debug("  Event: %s — %s", e.date, e.types)
 
     return CalendarData(address=address, events=events)
 
